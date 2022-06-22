@@ -51,13 +51,36 @@ class Converter:
             'location': '',
             'gripper-status': ''
         }
+        # print(type(Action().__dataclass_fields__['robot'].type))
         self.features = []
 
     def register_action(self, action_text: str):
         # First, add the action to the list of running actions
         args = []
         for item in action_text[1:]:
-            args.extend([self.mappings[item[:item.find(':')]], item[item.find(':') + 2:].replace('\'', '')])
+            name = self.mappings[item[:item.find(':')]]
+            value = item[item.find(':') + 2:].replace('\'', '')
+            if name != 'constraints' and name != '':
+                value = (type(Action().__dataclass_fields__[name].type))(value)
+            else:
+                value = []
+
+                # Find the before constraints
+                constraints_before = item.find('before')
+                while constraints_before != -1:
+                    value.append(Constraint(
+                        constraint='before',
+                        action=item[constraints_before + 14:item.find(')', constraints_before + 14)]))
+                    constraints_before = item.find('before', constraints_before + 1)
+
+                # Find the after constraints
+                constraints_before = item.find('after')
+                while constraints_before != -1:
+                    value.append(Constraint(
+                        constraint='after',
+                        action=item[constraints_before + 14:item.find(')', constraints_before + 13)]))
+                    constraints_before = item.find('after', constraints_before + 1)
+            args.extend([name, value])
         self.actions.append(Action('name', action_text[0][1:], *args))
 
         # Next, add the action to the timeline
@@ -75,7 +98,7 @@ class Converter:
                     return action_text
 
         def clean_line(text: str):
-            idx = text.find(';;')
+            idx = text.find(';')
             return text.strip() if idx == -1 else text[:idx].strip()
 
         file = open(self.plan_file, "r")
