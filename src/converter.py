@@ -7,11 +7,22 @@ import rospy
 from interval_tree import IntervalTree
 
 
+def field_type(str):
+    return {
+        'float': type(0.),
+        'str': type(''),
+        'int': type(0)
+    }[str]
+
+
 @dataclass
 class Constraint():
     'Represent a constraint on an action, relative to another action'
-    constraint: Literal["before", "after"]
+    constraint: Literal['before', 'after']
     action: str
+
+    def __eq__(self, other):
+        return self.constraint == other.constraint and self.action == other.action
 
 
 @dataclass
@@ -36,8 +47,8 @@ class Action():
 class Converter:
     def __init__(self, plan_file: str):
         self.plan_file = plan_file
-        self.actions = []
         self.interval_tree = None
+
         self.mappings = {
             'robot': 'robot',
             'start-location': 'start',
@@ -51,17 +62,21 @@ class Converter:
             'location': '',
             'gripper-status': ''
         }
-        # print(type(Action().__dataclass_fields__['robot'].type))
         self.features = []
+
+        self.actions = []
+        self.action_table = {}
 
     def register_action(self, action_text: str):
         # First, add the action to the list of running actions
         args = []
+
         for item in action_text[1:]:
             name = self.mappings[item[:item.find(':')]]
             value = item[item.find(':') + 2:].replace('\'', '')
             if name != 'constraints' and name != '':
-                value = (type(Action().__dataclass_fields__[name].type))(value)
+                # Cast the value to the correct type according to Action's definition
+                value = (field_type(Action().__dataclass_fields__[name].type))(value)
             else:
                 value = []
 
@@ -101,7 +116,7 @@ class Converter:
             idx = text.find(';')
             return text.strip() if idx == -1 else text[:idx].strip()
 
-        file = open(self.plan_file, "r")
+        file = open(self.plan_file, 'r')
         action_text = []
         paren_stack = 0
         for line in (clean_line(line) for line in file.readlines() if len(clean_line(line)) != 0):
@@ -115,10 +130,30 @@ class Converter:
             if paren_stack == 0 and len(action_text) != 0:
                 self.register_action(combine_constraints(action_text=action_text))
                 action_text = []
+
         self.timeline = IntervalTree(self.features, 0, max([i[1] for i in self.features]))
 
-        rospy.loginfo('Registered %d actions successfully.', len(self.actions))
+        # Put all the actions into a hash table
+        for action in self.actions:
+            self.action_table[action.name] = action
+
+        # Equalize the constraints: ensure they are bi-directional
+        for action in self.actions:
+            for constraint in action.constraints:
+                reciprocal_constraint = Constraint(
+                    constraint='after' if constraint.constraint == 'before' else 'before', action=action.name)
+                if reciprocal_constraint not in self.action_table[constraint.action].constraints:
+                    self.action_table[constraint.action].constraints.append(reciprocal_constraint)
+
+        # We are now done using the temporary self.actions variable
+        print(self.actions)
+        del self.actions
+
+        rospy.loginfo('Registered %d actions successfully.', len(self.action_table))
         rospy.loginfo('Created interval tree with %d nodes successfully.', len(self.features))
 
     def get_timeline(self):
         return self.timeline
+
+    def get_action_table(self):
+        return self.action_table

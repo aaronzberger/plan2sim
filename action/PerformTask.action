@@ -1,0 +1,8 @@
+# Goal
+action task
+---
+# Result
+system_controllers/result result
+---
+# Feedback
+float32 percent_complete
