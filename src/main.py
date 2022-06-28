@@ -7,6 +7,7 @@ from converter import Converter, Action
 
 import actionlib
 import plan2sim.msg as msg
+from std_srvs.srv import Empty
 
 
 def server(action: Action):
@@ -19,7 +20,7 @@ def server(action: Action):
 
 
 class Plan2Sim:
-    def __init__(self, plan_file):
+    def __init__(self, plan_file: str):
         self.converter_node = Converter(plan_file)
         self.converter_node.convert()
         self.interval_tree = self.converter_node.get_timeline()
@@ -36,12 +37,16 @@ class Plan2Sim:
             'free_flyer_arm': actionlib.SimpleActionClient('free_flyer', msg.PerformTaskAction)
         }
 
-        # for i, client in enumerate(self.action_clients):
-        #     print('Waiting for {} server ({}/{})... '.format(
-        #         client, i + 1, len(self.action_clients)), end='', flush=True)
-        #     self.action_clients[client].wait_for_server()
-        #     print('CONNECTED')
+        for i, client in enumerate(self.action_clients):
+            print('Waiting for {} server ({}/{})... '.format(
+                client, i + 1, len(self.action_clients)), end='', flush=True)
+            self.action_clients[client].wait_for_server()
+            print('CONNECTED')
         rospy.loginfo('All servers connected.')
+
+        # Start the simulation
+        rospy.wait_for_service('start_sim', timeout=rospy.Duration(secs=20))
+        rospy.ServiceProxy('start_sim', Empty)()
 
         # Begin the planner
         self.actions_completed = set()
@@ -59,7 +64,8 @@ class Plan2Sim:
             client = server(action)
             if client:
                 self.action_clients[client].send_goal(
-                    goal, feedback_cb=(lambda fb: print('{} action is {}% done'.format(action.name, fb.percent_complete))),
+                    goal, feedback_cb=(lambda fb: print(
+                        '{} action is {}% done'.format(action.name, fb.percent_complete))),
                     done_cb=(lambda _, res: print(
                         '{} completed at {} seconds at position {}'.format(
                             action.name, res.result.time_ended, res.result.final_position))))
@@ -77,7 +83,7 @@ class Plan2Sim:
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
 
-                # Deal with all constraints
+                # TODO: Deal with all constraints
                 run(self.action_table[action])
 
 

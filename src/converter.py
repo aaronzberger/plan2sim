@@ -21,7 +21,7 @@ class Constraint():
     constraint: Literal['before', 'after']
     action: str
 
-    def __eq__(self, other):
+    def __eq__(self, other: Constraint):
         return self.constraint == other.constraint and self.action == other.action
 
 
@@ -146,7 +146,6 @@ class Converter:
                     self.action_table[constraint.action].constraints.append(reciprocal_constraint)
 
         # We are now done using the temporary self.actions variable
-        print(self.actions)
         del self.actions
 
         rospy.loginfo('Registered %d actions successfully.', len(self.action_table))
