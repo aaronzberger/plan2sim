@@ -4,10 +4,11 @@ import rospy
 import sys
 import os
 from converter import Converter, Action
+from termcolor import colored
 
 import actionlib
 import plan2sim.msg as msg
-from std_srvs.srv import Empty
+from std_srvs.srv import Trigger
 
 
 def server(action: Action):
@@ -38,15 +39,19 @@ class Plan2Sim:
         }
 
         for i, client in enumerate(self.action_clients):
-            print('Waiting for {} server ({}/{})... '.format(
-                client, i + 1, len(self.action_clients)), end='', flush=True)
+            print(colored('Waiting for {} server ({}/{})... '.format(
+                client, i + 1, len(self.action_clients)), color='yellow', attrs=['blink']), end='', flush=True)
             self.action_clients[client].wait_for_server()
-            print('CONNECTED')
-        rospy.loginfo('All servers connected.')
+            print('\r' + colored('Waiting for {} server ({}/{})... '.format(
+                client, i + 1, len(self.action_clients)), color='yellow'), end='', flush=True)
+            print(colored('CONNECTED', color='green'))
+        print(colored('All servers connected.', color='green'))
 
         # Start the simulation
         rospy.wait_for_service('start_sim', timeout=rospy.Duration(secs=20))
-        rospy.ServiceProxy('start_sim', Empty)()
+        sim_response = rospy.ServiceProxy('start_sim', Trigger)()
+        if not sim_response.success:
+            raise ConnectionRefusedError('Could not start the simulation successfully.')
 
         # Begin the planner
         self.actions_completed = set()
@@ -70,7 +75,7 @@ class Plan2Sim:
                         '{} completed at {} seconds at position {}'.format(
                             action.name, res.result.time_ended, res.result.final_position))))
             else:
-                print('Unknown implementation of action {}'.format(action.name))
+                print(colored('Unknown implementation of action {}'.format(action.name), color='red'))
             # self.action_clients[action.name].wait_for_result(rospy.Duration.from_sec(5))
 
         if event.last_real is None:
