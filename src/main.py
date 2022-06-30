@@ -61,7 +61,7 @@ class Plan2Sim:
         rospy.Timer(rospy.Duration(secs=1), self.planner)
 
         # The running offset needed to satisfy the action constraints
-        self.time_offset = 0
+        self.time_offset = rospy.Duration(secs=0)
 
     def planner(self, event: rospy.timer.TimerEvent):
         def run(action: Action):
@@ -69,12 +69,11 @@ class Plan2Sim:
 
             def feedback_cb(fb):
                 '''Handle any updates from the controller during this action's execution'''
-                print(type(fb), flush=True)
-                print('{} action is {}% done'.format(action.name, fb.percent_complete))
+                # print('{} action is {}% done'.format(action.name, fb.percent_complete))
 
             def action_complete(_, res):
                 '''Handle the final result from the controller after this action has finished'''
-                print('received action complete in plan2sim callback', res)
+                # print('received action complete in plan2sim callback', res)
                 print('{} completed at {} seconds at position {}'.format(
                     res.result.name, res.result.time_ended, res.result.final_position))
                 self.actions_executing.remove(res.result.name)
@@ -83,8 +82,8 @@ class Plan2Sim:
             print('executing action {}'.format(action.name))
 
             goal = msg.PerformTaskGoal(task=msg.action(
-                name=action.name, start_time=action.start_time + self.time_offset,
-                end_time=action.end_time + self.time_offset,
+                name=action.name, start_time=action.start_time + self.time_offset.to_sec(),
+                end_time=action.end_time + self.time_offset.to_sec(),
                 start=action.start, end=action.end))
 
             # Send the goal to the server and register the callbacks
@@ -108,19 +107,26 @@ class Plan2Sim:
              ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
-                # Check if this action is constrained to be after another action that hasn't finished
-                first = True
-                while self.actions_completed & set([i.action for i in action.constraints if i.constraint == 'after']):
-                    # Delay all future actions until the necessary constraint actions have finished
-                    rospy.Rate(10).sleep()
-                    self.time_offset += 0.1
+                # Check if this action is constrained to be after another action that hasn't finished by
+                # computing the intersection of the completed actions set and the set of constraints
+                not_met = self.actions_completed & set(
+                        [i.action for i in self.action_table[action].constraints if i.constraint == 'after'])
+                if not_met:
                     print(colored(
-                        ('' if first else '\r') +
-                        'Constraint failed. Delaying planner until \'{}\'\'s constraints have been met...'.format(
-                            action), color='red', attr=['blink']))
-                    first = False
-                if not first:
-                    print(colored('\rConstraint met...', color='green'))
+                        '{}\'s constraints failed. Delaying planner until met'.format(
+                            action), color='red'), end='', flush=True)
+                    counter = 0
+                    while not_met:
+                        # Delay all future actions until the necessary constraint actions have finished
+                        rospy.Rate(10).sleep()
+                        self.time_offset += rospy.Duration(secs=0.1)
+                        if counter % 10 == 0:
+                            print(colored('.', color='red'), end='', flush=True)
+                        counter += 1
+                        not_met = self.actions_completed & set(
+                            [i.action for i in self.action_table[action].constraints if i.constraint == 'after'])
+
+                    print(colored('\rConstraint met...', color='green'), flush=True)
 
                 run(self.action_table[action])
 
