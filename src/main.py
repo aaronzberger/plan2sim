@@ -1,14 +1,15 @@
 #!/usr/bin/python3
 
-import rospy
-import sys
 import os
-from converter import Converter, Action
-from termcolor import colored
+import sys
 
 import actionlib
-import plan2sim.msg as msg
+import rospy
 from std_srvs.srv import Trigger
+from termcolor import colored
+
+from converter import Action, Converter
+import plan2sim.msg as msg
 
 
 def server(action: Action):
@@ -59,36 +60,68 @@ class Plan2Sim:
         self.start_time = rospy.get_rostime()
         rospy.Timer(rospy.Duration(secs=1), self.planner)
 
+        # The running offset needed to satisfy the action constraints
+        self.time_offset = 0
+
     def planner(self, event: rospy.timer.TimerEvent):
         def run(action: Action):
+            '''Send a task to its controller and manage feedback and results'''
+
+            def feedback_cb(fb):
+                '''Handle any updates from the controller during this action's execution'''
+                print(type(fb), flush=True)
+                print('{} action is {}% done'.format(action.name, fb.percent_complete))
+
+            def action_complete(_, res):
+                '''Handle the final result from the controller after this action has finished'''
+                print('received action complete in plan2sim callback', res)
+                print('{} completed at {} seconds at position {}'.format(
+                    res.result.name, res.result.time_ended, res.result.final_position))
+                self.actions_executing.remove(res.result.name)
+                self.actions_completed.add(res.result.name)
+
+            print('executing action {}'.format(action.name))
+
             goal = msg.PerformTaskGoal(task=msg.action(
-                name=action.name, start_time=action.start_time, end_time=action.end_time,
+                name=action.name, start_time=action.start_time + self.time_offset,
+                end_time=action.end_time + self.time_offset,
                 start=action.start, end=action.end))
 
-            # Send the goal to the server and register the feedback and results callbacks
+            # Send the goal to the server and register the callbacks
             client = server(action)
             if client:
                 self.action_clients[client].send_goal(
-                    goal, feedback_cb=(lambda fb: print(
-                        '{} action is {}% done'.format(action.name, fb.percent_complete))),
-                    done_cb=(lambda _, res: print(
-                        '{} completed at {} seconds at position {}'.format(
-                            action.name, res.result.time_ended, res.result.final_position))))
+                    goal, feedback_cb=feedback_cb, done_cb=action_complete)
             else:
                 print(colored('Unknown implementation of action {}'.format(action.name), color='red'))
-            # self.action_clients[action.name].wait_for_result(rospy.Duration.from_sec(5))
+
+            self.actions_executing.add(action.name)
 
         if event.last_real is None:
             event.last_real = self.start_time
 
         # Get the actions that should be running now from the interval tree
+        print('range is', [((event.last_real - self.time_offset) - self.start_time).to_sec(),
+                           ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         current_actions = self.interval_tree.find_range(
-            [(event.last_real - self.start_time).to_sec(), (event.current_real - self.start_time).to_sec()])
-
+            [((event.last_real - self.time_offset) - self.start_time).to_sec(),
+             ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
+                # Check if this action is constrained to be after another action that hasn't finished
+                first = True
+                while self.actions_completed & set([i.action for i in action.constraints if i.constraint == 'after']):
+                    # Delay all future actions until the necessary constraint actions have finished
+                    rospy.Rate(10).sleep()
+                    self.time_offset += 0.1
+                    print(colored(
+                        ('' if first else '\r') +
+                        'Constraint failed. Delaying planner until \'{}\'\'s constraints have been met...'.format(
+                            action), color='red', attr=['blink']))
+                    first = False
+                if not first:
+                    print(colored('\rConstraint met...', color='green'))
 
-                # TODO: Deal with all constraints
                 run(self.action_table[action])
 
 

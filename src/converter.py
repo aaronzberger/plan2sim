@@ -1,9 +1,12 @@
 #!/usr/bin/python3
 
 from __future__ import annotations
-from typing import Literal
+
 from dataclasses import dataclass
+from typing import Literal
+
 import rospy
+
 from interval_tree import IntervalTree
 
 
