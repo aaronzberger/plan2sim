@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+from shutil import ExecError
 import sys
 
 import actionlib
@@ -32,8 +33,10 @@ class Plan2Sim:
 
         self.action_clients = {
             'ur5a_arm': actionlib.SimpleActionClient('ur5a_arm', msg.PerformTaskAction),
+            'ur5a_gripper': actionlib.SimpleActionClient('ur5a_gripper', msg.PerformTaskAction),
             'ur5a_rail': actionlib.SimpleActionClient('ur5a_rail', msg.PerformTaskAction),
             'ur5b_arm': actionlib.SimpleActionClient('ur5b_arm', msg.PerformTaskAction),
+            'ur5b_gripper': actionlib.SimpleActionClient('ur5b_gripper', msg.PerformTaskAction),
             'ur5b_rail': actionlib.SimpleActionClient('ur5b_rail', msg.PerformTaskAction),
             'free_flyer': actionlib.SimpleActionClient('free_flyer', msg.PerformTaskAction),
             'free_flyer_arm': actionlib.SimpleActionClient('free_flyer', msg.PerformTaskAction)
@@ -53,6 +56,26 @@ class Plan2Sim:
         sim_response = rospy.ServiceProxy('start_sim', Trigger)()
         if not sim_response.success:
             raise ConnectionRefusedError('Could not start the simulation successfully.')
+
+        # Move the subsystems to their default locations
+        self.subsystems_ready = False
+
+        def done_cb(_, res):
+            if not res.result.succeeded:
+                print(colored('Failed to complete move to {}'.format(res.result.name), color='red'))
+            self.subsystems_ready = True
+
+        def set_to_initial(name, position):
+            self.action_clients[name].send_goal(msg.PerformTaskGoal(task=msg.action(
+                name=name + '_initial', start_time=0, end_time=10,
+                start='', end=position)), done_cb=done_cb)
+
+        set_to_initial('ur5a_arm', 'contracted')
+        set_to_initial('ur5b_arm', 'contracted')
+        set_to_initial('ur5a_rail', 'r-blk1')
+        set_to_initial('ur5b_rail', 'r-blk10')
+
+        rospy.sleep(rospy.Duration(10))
 
         # Begin the planner
         self.actions_completed = set()
@@ -107,24 +130,24 @@ class Plan2Sim:
              ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
-                # Check if this action is constrained to be after another action that hasn't finished by
-                # computing the intersection of the completed actions set and the set of constraints
-                not_met = self.actions_completed & set(
+                # If all constrains are met, the intersection between the set of all completed actions and the
+                # set of all constraints will be the same size as the set of all constraints
+                constraints = set(
                         [i.action for i in self.action_table[action].constraints if i.constraint == 'after'])
-                if not_met:
+                constraints_met = len(self.actions_completed & constraints) == len(constraints)
+                if not constraints_met:
                     print(colored(
                         '{}\'s constraints failed. Delaying planner until met'.format(
                             action), color='red'), end='', flush=True)
                     counter = 0
-                    while not_met:
+                    while not constraints_met:
                         # Delay all future actions until the necessary constraint actions have finished
                         rospy.Rate(10).sleep()
                         self.time_offset += rospy.Duration(secs=0.1)
                         if counter % 10 == 0:
                             print(colored('.', color='red'), end='', flush=True)
                         counter += 1
-                        not_met = self.actions_completed & set(
-                            [i.action for i in self.action_table[action].constraints if i.constraint == 'after'])
+                        constraints_met = len(self.actions_completed & constraints) == len(constraints)
 
                     print(colored('\rConstraint met...', color='green'), flush=True)
 
