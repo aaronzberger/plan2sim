@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 import os
-from shutil import ExecError
 import sys
 
 import actionlib
@@ -11,6 +10,9 @@ from termcolor import colored
 
 from converter import Action, Converter
 import plan2sim.msg as msg
+import custom_actions
+import system_controllers.msg
+from plan2sim.msg import PerformTaskResult
 
 
 def server(action: Action):
@@ -58,12 +60,9 @@ class Plan2Sim:
             raise ConnectionRefusedError('Could not start the simulation successfully.')
 
         # Move the subsystems to their default locations
-        self.subsystems_ready = False
-
-        def done_cb(_, res):
+        def done_cb(_, res: PerformTaskResult):
             if not res.result.succeeded:
                 print(colored('Failed to complete move to {}'.format(res.result.name), color='red'))
-            self.subsystems_ready = True
 
         def set_to_initial(name, position):
             self.action_clients[name].send_goal(msg.PerformTaskGoal(task=msg.action(
@@ -72,8 +71,8 @@ class Plan2Sim:
 
         set_to_initial('ur5a_arm', 'contracted')
         set_to_initial('ur5b_arm', 'contracted')
-        set_to_initial('ur5a_rail', 'r-blk1')
         set_to_initial('ur5b_rail', 'r-blk10')
+        set_to_initial('ur5a_rail', 'r-blk1')
 
         rospy.sleep(rospy.Duration(10))
 
@@ -94,15 +93,21 @@ class Plan2Sim:
                 '''Handle any updates from the controller during this action's execution'''
                 # print('{} action is {}% done'.format(action.name, fb.percent_complete))
 
-            def action_complete(_, res):
+            def action_complete(_, res: PerformTaskResult):
                 '''Handle the final result from the controller after this action has finished'''
                 # print('received action complete in plan2sim callback', res)
-                print('{} completed at {} seconds at position {}'.format(
-                    res.result.name, res.result.time_ended, res.result.final_position))
+                if res.result.succeeded:
+                    print(colored('{} completed at {:.2f} seconds'.format(
+                        res.result.name, res.result.time_ended), color='green'), end='')
+                    print(colored(' at position {}'.format(res.result.final_position), color='green')
+                          if res.result.final_position != 'n/a' else '')
+                else:
+                    print(colored('{} failed to complete fully and ended at {:.2f}'.format(
+                        res.result.name, res.result.time_ended), color='yellow'))
                 self.actions_executing.remove(res.result.name)
                 self.actions_completed.add(res.result.name)
 
-            print('executing action {}'.format(action.name))
+            print(colored('starting action {}'.format(action.name), color='cyan'))
 
             goal = msg.PerformTaskGoal(task=msg.action(
                 name=action.name, start_time=action.start_time + self.time_offset.to_sec(),
@@ -111,20 +116,24 @@ class Plan2Sim:
 
             # Send the goal to the server and register the callbacks
             client = server(action)
+            self.actions_executing.add(action.name)
+
             if client:
+                self.action_clients[client].cancel_goal()
                 self.action_clients[client].send_goal(
                     goal, feedback_cb=feedback_cb, done_cb=action_complete)
             else:
-                print(colored('Unknown implementation of action {}'.format(action.name), color='red'))
-
-            self.actions_executing.add(action.name)
+                custom_actions.execute(action.name)
+                action_complete(None, PerformTaskResult(result=system_controllers.msg.result(
+                    name=action.name, time_ended=action.start_time, final_position='n/a', succeeded=True)))
 
         if event.last_real is None:
             event.last_real = self.start_time
 
         # Get the actions that should be running now from the interval tree
-        print('range is', [((event.last_real - self.time_offset) - self.start_time).to_sec(),
-                           ((event.current_real - self.time_offset) - self.start_time).to_sec()])
+        print('executing actions in time range [{:3.0f}:{:3.0f}]'.format(
+            ((event.last_real - self.time_offset) - self.start_time).to_sec(),
+            ((event.current_real - self.time_offset) - self.start_time).to_sec()))
         current_actions = self.interval_tree.find_range(
             [((event.last_real - self.time_offset) - self.start_time).to_sec(),
              ((event.current_real - self.time_offset) - self.start_time).to_sec()])

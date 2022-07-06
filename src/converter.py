@@ -8,6 +8,7 @@ from typing import Literal
 import rospy
 
 from interval_tree import IntervalTree
+from termcolor import colored
 
 
 def field_type(str):
@@ -99,7 +100,12 @@ class Converter:
                         action=item[constraints_before + 14:item.find(')', constraints_before + 13)]))
                     constraints_before = item.find('after', constraints_before + 1)
             args.extend([name, value])
-        self.actions.append(Action('name', action_text[0][1:], *args))
+        new_action = Action('name', action_text[0][1:], *args)
+        self.actions.append(new_action)
+
+        if new_action.end is None or new_action.robot is None or new_action.start_time is None:
+            print(colored('Warning: Custom implementation required for action {}, '.format(new_action.name) +
+                          'since it is missing an attribute (likely \'end\')', color='yellow'))
 
         # Next, add the action to the timeline
         self.features.append([
