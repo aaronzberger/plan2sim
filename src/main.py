@@ -28,10 +28,9 @@ class Plan2Sim:
     def __init__(self, plan_file: str):
         self.converter_node = Converter(plan_file)
         self.converter_node.convert()
-        self.interval_tree = self.converter_node.get_timeline()
-        self.action_table = self.converter_node.get_action_table()
-
-        self.constraints = []
+        self.interval_tree = self.converter_node.timeline
+        self.action_table = self.converter_node.action_table
+        self.constraint_table = self.converter_node.constraint_table
 
         self.action_clients = {
             'ur5a_arm': actionlib.SimpleActionClient('ur5a_arm', msg.PerformTaskAction),
@@ -64,7 +63,7 @@ class Plan2Sim:
             if not res.result.succeeded:
                 print(colored('Failed to complete move to {}'.format(res.result.name), color='red'))
 
-        def set_to_initial(name, position):
+        def set_to_initial(name: str, position: str):
             self.action_clients[name].send_goal(msg.PerformTaskGoal(task=msg.action(
                 name=name + '_initial', start_time=0, end_time=10,
                 start='', end=position)), done_cb=done_cb)
@@ -77,8 +76,8 @@ class Plan2Sim:
         rospy.sleep(rospy.Duration(10))
 
         # Begin the planner
-        self.actions_completed = set()
-        self.actions_executing = set()
+        self.actions_completed: set[str] = set()
+        self.actions_executing: set[str] = set()
         self.start_time = rospy.get_rostime()
         rospy.Timer(rospy.Duration(secs=1), self.planner)
 
@@ -107,25 +106,26 @@ class Plan2Sim:
                 self.actions_executing.remove(res.result.name)
                 self.actions_completed.add(res.result.name)
 
-            print(colored('starting action {}'.format(action.name), color='cyan'))
+            print(colored('starting action {}'.format(action.id), color='cyan'))
 
+            # TODO: Change goal to represent state change
             goal = msg.PerformTaskGoal(task=msg.action(
-                name=action.name, start_time=action.start_time + self.time_offset.to_sec(),
-                end_time=action.end_time + self.time_offset.to_sec(),
+                name=action.id, start_time=action.lst + self.time_offset.to_sec(),
+                end_time=action.lft + self.time_offset.to_sec(),
                 start=action.start, end=action.end))
 
             # Send the goal to the server and register the callbacks
             client = server(action)
-            self.actions_executing.add(action.name)
+            self.actions_executing.add(action.id)
 
             if client:
                 self.action_clients[client].cancel_goal()
                 self.action_clients[client].send_goal(
                     goal, feedback_cb=feedback_cb, done_cb=action_complete)
             else:
-                custom_actions.execute(action.name)
+                custom_actions.execute(action.id)
                 action_complete(None, PerformTaskResult(result=system_controllers.msg.result(
-                    name=action.name, time_ended=action.start_time, final_position='n/a', succeeded=True)))
+                    name=action.id, time_ended=action.lst, final_position='n/a', succeeded=True)))
 
         if event.last_real is None:
             event.last_real = self.start_time
@@ -134,11 +134,12 @@ class Plan2Sim:
         print('executing actions in time range [{:3.0f}:{:3.0f}]'.format(
             ((event.last_real - self.time_offset) - self.start_time).to_sec(),
             ((event.current_real - self.time_offset) - self.start_time).to_sec()))
-        current_actions = self.interval_tree.find_range(
+        current_actions: list[str] = self.interval_tree.find_range(
             [((event.last_real - self.time_offset) - self.start_time).to_sec(),
              ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
+                # TODO: Fix constraints to meet new format
                 # If all constrains are met, the intersection between the set of all completed actions and the
                 # set of all constraints will be the same size as the set of all constraints
                 constraints = set(
