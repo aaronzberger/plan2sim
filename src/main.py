@@ -4,24 +4,16 @@ import os
 import sys
 
 import actionlib
+import plan2sim.msg as msg
 import rospy
+import system_controllers.msg
+from plan2sim.msg import PerformTaskResult
 from std_srvs.srv import Trigger
 from termcolor import colored
 
-from converter import Action, Converter
-import plan2sim.msg as msg
 import custom_actions
-import system_controllers.msg
-from plan2sim.msg import PerformTaskResult
-
-
-def server(action: Action):
-    if action.robot == 'UR5A':
-        return 'ur5a_rail' if 'rail' in action.name else 'ur5a_arm'
-    if action.robot == 'UR5B':
-        return 'ur5b_rail' if 'rail' in action.name else 'ur5b_arm'
-    if action.robot == 'FF1':
-        return 'free_flyer' if 'traverse' in action.name else 'free_flyer_arm'
+from converter import Action, Converter
+from helpers import State
 
 
 class Plan2Sim:
@@ -43,6 +35,24 @@ class Plan2Sim:
             'free_flyer_arm': actionlib.SimpleActionClient('free_flyer', msg.PerformTaskAction)
         }
 
+        self.state_mapper = {
+            'UR5A': {
+                'at-arm': self.action_clients['ur5a_arm'],
+                'at-location': self.action_clients['ur5a_rail'],
+                'gripper-holding': self.action_clients['ur5a_gripper']
+            },
+            'UR5B': {
+                'at-arm': self.action_clients['ur5b_arm'],
+                'at-location': self.action_clients['ur5b_rail'],
+                'gripper-holding': self.action_clients['ur5b_gripper']
+            },
+            'FF1': {
+                'at-arm': self.action_clients['free_flyer'],
+                'at-location': self.action_clients['free_flyer'],
+                'gripper-holding': self.action_clients['free_flyer_arm']
+            }
+        }
+
         for i, client in enumerate(self.action_clients):
             print(colored('Waiting for {} server ({}/{})... '.format(
                 client, i + 1, len(self.action_clients)), color='yellow', attrs=['blink']), end='', flush=True)
@@ -56,7 +66,7 @@ class Plan2Sim:
         rospy.wait_for_service('start_sim', timeout=rospy.Duration(secs=20))
         sim_response = rospy.ServiceProxy('start_sim', Trigger)()
         if not sim_response.success:
-            raise ConnectionRefusedError('Could not start the simulation successfully.')
+            raise ConnectionRefusedError('Dispatcher failed: could not start the simulation successfully.')
 
         # Move the subsystems to their default locations
         def done_cb(_, res: PerformTaskResult):
@@ -108,19 +118,34 @@ class Plan2Sim:
 
             print(colored('starting action {}'.format(action.id), color='cyan'))
 
-            # TODO: Change goal to represent state change
+            # Retrieve the state change
+            effect = action.effects[0]
+
+            matching_precondition = \
+                [p for p in action.preconditions if p.predicate == effect.predicate and p.arguments == effect.arguments]
+
+            if len(matching_precondition) > 1:
+                raise ValueError('Dispatcher failed: an action may only have one precondition per predicate/resource pair')
+
+            state_change: tuple[State, State] = (matching_precondition[0], effect)
+
+            # Convert this state change to a client/position pair
+            try:
+                client = self.state_mapper[action.resources[0]][state_change[0].predicate]
+            except KeyError:
+                client = None
+
             goal = msg.PerformTaskGoal(task=msg.action(
-                name=action.id, start_time=action.lst + self.time_offset.to_sec(),
+                name=action.id,
                 end_time=action.lft + self.time_offset.to_sec(),
-                start=action.start, end=action.end))
+                end=state_change[1].value))
 
             # Send the goal to the server and register the callbacks
-            client = server(action)
             self.actions_executing.add(action.id)
 
-            if client:
-                self.action_clients[client].cancel_goal()
-                self.action_clients[client].send_goal(
+            if client is not None:
+                client.cancel_goal()
+                client.send_goal(
                     goal, feedback_cb=feedback_cb, done_cb=action_complete)
             else:
                 custom_actions.execute(action.id)
@@ -139,11 +164,9 @@ class Plan2Sim:
              ((event.current_real - self.time_offset) - self.start_time).to_sec()])
         for action in current_actions:
             if action not in self.actions_completed | self.actions_executing:
-                # TODO: Fix constraints to meet new format
                 # If all constrains are met, the intersection between the set of all completed actions and the
                 # set of all constraints will be the same size as the set of all constraints
-                constraints = set(
-                        [i.action for i in self.action_table[action].constraints if i.constraint == 'after'])
+                constraints = set([c.sink for c in self.constraint_table[action]])
                 constraints_met = len(self.actions_completed & constraints) == len(constraints)
                 if not constraints_met:
                     print(colored(
