@@ -31,11 +31,11 @@ Code locations for the other nodes are listed below:
 - [__MJ CONTROLLER__](https://github.com/aaronzberger/mj_controller)
 
 ## Conversion
-First, the plan file provided is interpreted by the conversion module:
+The [`helpers.py`](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/helpers.py) file contains `TypedDict` objects corresponding exactly to the input format. The inputted plan file is passed to [`converter.py`](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/converter.py), where is it [deserialized](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/converter.py#L14:L28) and stored as a single `Plan` object.
 
-  - Each task is converted to an `Action`, which specifies the subsystem, positions, times, and constraints.
-  - Next, these `Action`s are placed in an [interval tree](https://github.com/aaronzberger/plan2sim/blob/main/src/interval_tree.py), which efficiently stores the time intervals for quick access during execution.
-  - The `Action`s are also placed into a hash table for access during execution.
+The `Action`s are then placed in an [interval tree](https://github.com/aaronzberger/plan2sim/blob/main/src/interval_tree.py), which efficiently stores the time intervals for quick access during execution.
+
+The `Action`s and `Constraint`s from the input file are also placed into hash tables for access during execution.
 
 ## ROS Actions
 This pipeline uses ROS's [`actionlib`](http://wiki.ros.org/actionlib) library for communicating between nodes.
@@ -49,16 +49,16 @@ After the conversion has finished, the planner is ready to begin. After [confirm
 
 The planner is run at 1 Hz (since actions are only specified to start on the second). During each iteration,
 
-  - We [query](https://github.com/aaronzberger/plan2sim/blob/main/src/main.py#L133:L139) the interval tree to find which actions should be running.
-  - Next, we [wait](https://github.com/aaronzberger/plan2sim/blob/main/src/main.py#L140:L161) until the constraints for all the scheduled actions are satisfied.
-  - Then, we [run](https://github.com/aaronzberger/plan2sim/blob/main/src/main.py#L110:L128) those actions, sending them to the action servers in the `System Controllers` node and awaiting [progress](https://github.com/aaronzberger/plan2sim/blob/main/src/main.py#L92:L94) updates and a [final result](https://github.com/aaronzberger/plan2sim/blob/main/src/main.py#L96:L108).
+  - We [query](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L162:L164) the interval tree to find which actions should be running.
+  - Next, we [wait](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L176:L185) until the constraints for all the scheduled actions are satisfied.
+  - Then, we [run](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L187) those actions, sending them to the action servers in the `System Controllers` node and awaiting [progress](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L101:L103) updates and a [final result](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L105:L117).
 
 ### Custom Actions
-When running the tasks specified in the plan file, we make an assumption that the task changes the state of the world and can therefore be concretely simulated by moving a joint to a position. However, this does not always hold true. For example, a space station executive turning the airflow off is not useful to simulate and does not involve moving any motor. Instead, this node recognizes that this task is different and asks the user to specify its implementation.
+To determine which action client an action should be given to, we first determine the [state change](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L130): how the environment changes from executing the action (provided by preconditions and effects in the input file). We then map this state change to an action client via the [state mapper](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L134). However, if the resources needed to perform the action or the type of state change is unknown by the state mapper, the state mapper will yield no result, so the planner assumes this is a custom defined action:
 
-During the [conversion](#Conversion), this node prints warnings for any task it deems needs a special implementation. The user must then write these implementations in [`custom_actions.py`](https://github.com/aaronzberger/plan2sim/blob/main/src/custom_actions.py) by making a new function, and mapping the task's name to that function in the [dictionary](https://github.com/aaronzberger/plan2sim/blob/main/src/custom_actions.py#L7:L11).
+Actions like spacecraft actions (turning the airflow off and on), must be customly defined in [`custom_actions.py`](https://github.com/aaronzberger/plan2sim/blob/main/src/custom_actions.py). The planner [calls](https://github.com/aaronzberger/plan2sim/blob/96c7b1dc42e1623735ce1c2248092bdf8e0a2a8d/src/main.py#L151) these actions and proceeds, whiule assuming the custom function executes correctly.
 
-This process will be needed for each new plan, and simply reflects that the simulation will not perfectly represent the full state of the world. It optimizes for easy viewing and portability and cannot possibly understand every possible task.
+This process will be needed for each new plan, and simply reflects that the simulation will not perfectly represent the full state of the world. It optimizes for easy viewing and portability and does not understand tasks that involve resources or state changes that are unfamiliar.
 
 ## Acknowledgements
   - Zachary Rubinstein for plan file assistance and general feedback
