@@ -137,6 +137,7 @@ class Plan2Sim:
 
             goal = msg.PerformTaskGoal(task=msg.action(
                 name=action.id,
+                start_time=action.lst + self.time_offset.to_sec(),
                 end_time=action.lft + self.time_offset.to_sec(),
                 end=state_change[1].value))
 

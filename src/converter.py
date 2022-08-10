@@ -14,14 +14,19 @@ from interval_tree import IntervalTree
 def deserialize(data: dict[str, Any]) -> Plan:
     actions: list[Action] = []
     for action in data['actions']:
-        preconditions = [State(**p) for p in action['preconditions']]
+        try:
+            preconditions = [State(**p) for p in action['preconditions']]
+        except TypeError:
+            preconditions = []
         effects = [State(**e) for e in action['effects']]
 
         if len(effects) > 1:
             raise ValueError('Conversion failed: an action can only model one state change, ' +
                              'and can therefore only have one effect.')
 
-        actions.append(Action(**action, preconditions=preconditions, effects=effects))
+        actions.append(Action(action=action['action'], id=action['id'], resources=action['resources'],
+                              preconditions=preconditions, effects=effects,
+                              est=action['est'], lst=action['lst'], eft=action['eft'], lft=action['lft']))
 
     constraints = [Constraint(**c) for c in data['constraints']]
 
@@ -50,8 +55,8 @@ class Converter:
 
         # Hash all constraints by source ID
         for constraint in plan.constraints:
-            if constraint.type != 'BEFORE':
-                raise ValueError('Conversion failed: only constraints of type \'BEFORE\' are currently supported')
+            if constraint.type not in ['BEFORE', 'MEETS']:
+                raise ValueError('Conversion failed: only constraints of type \'BEFORE\' and \'MEETS\' are supported')
             if constraint.source in self.constraint_table:
                 self.constraint_table[constraint.source].append(constraint)
             else:
