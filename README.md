@@ -27,7 +27,7 @@ This node is the first in the Plan-to-Simulation pipeline, responsible for inter
 Each node is a separate ROS node, each receiving and publishing relevant data.
 
 Code locations for the other nodes are listed below:
-- [__SYSTEM CONTROLLERS__](https://github.com/aaronzberger/CMU_EKF_Node)
+- [__SYSTEM CONTROLLERS__](https://github.com/aaronzberger/system_controllers)
 - [__MJ CONTROLLER__](https://github.com/aaronzberger/mj_controller)
 
 ## Conversion
